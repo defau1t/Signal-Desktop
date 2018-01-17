@@ -669,10 +669,13 @@
     },
 
     updateExpirationTimer: function(expireTimer, source, received_at) {
-        if (!expireTimer) { expireTimer = null; }
+        if (!expireTimer) {
+            expireTimer = null;
+        }
+
         source = source || textsecure.storage.user.getNumber();
         var timestamp = received_at || Date.now();
-        this.save({ expireTimer: expireTimer });
+
         var message = this.messageCollection.add({
             conversationId        : this.id,
             type                  : received_at ? 'incoming' : 'outgoing',
@@ -690,8 +693,16 @@
         if (message.isOutgoing()) {
             message.set({recipients: this.getRecipients() });
         }
-        message.save();
-        if (message.isOutgoing()) { // outgoing update, send it to the number/group
+
+        return Promise.all([
+            wrapDeferred(message.save()),
+            wrapDeferred(this.save({ expireTimer: expireTimer })),
+        ]).then(function() {
+            if (message.isIncoming()) {
+                return message;
+            }
+
+            // change was made locally, send it to the number/group
             var sendFunc;
             if (this.get('type') == 'private') {
                 sendFunc = textsecure.messaging.sendExpirationTimerUpdateToNumber;
@@ -703,9 +714,16 @@
             if (this.get('profileSharing')) {
                profileKey = storage.get('profileKey');
             }
-            message.send(sendFunc(this.get('id'), this.get('expireTimer'), message.get('sent_at'), profileKey));
-        }
-        return message;
+            var promise = sendFunc(this.get('id'),
+                this.get('expireTimer'),
+                message.get('sent_at'),
+                profileKey
+            );
+
+            return message.send(promise).then(function() {
+                return message;
+            });
+        }.bind(this));
     },
 
     isSearchable: function() {
